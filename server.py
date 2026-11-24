@@ -5,6 +5,7 @@
 Chạy: python server.py   (cần: pip install pillow)
 """
 import sys, os, io, re, json, time, secrets, socket, threading, subprocess, urllib.request
+import struct, base64, hashlib
 
 if os.name != "nt":
     print("Chương trình này chỉ chạy trên Windows.")
@@ -14,7 +15,7 @@ import ctypes
 import ctypes.wintypes as wt
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-from PIL import ImageGrab, Image, ImageDraw
+from PIL import ImageGrab, Image
 
 PORT = 8765
 
@@ -184,27 +185,84 @@ def handle_events(events):
     cx, cy = cursor_pos()
     return {"cx": cx / max(1, w - 1), "cy": cy / max(1, h - 1)}
 
-# ---------- Chụp màn hình ----------
-CURSOR_SHAPE = [(0, 0), (0, 17), (4, 13), (7, 20), (10, 19), (7, 12), (12, 12)]
+# ---------- Chụp màn hình (GDI: chụp + thu nhỏ trong 1 bước, rất nhanh) ----------
+gdi32 = ctypes.windll.gdi32
+user32.GetDC.restype = wt.HDC
+user32.GetDC.argtypes = (wt.HWND,)
+user32.ReleaseDC.argtypes = (wt.HWND, wt.HDC)
+gdi32.CreateCompatibleDC.restype = wt.HDC
+gdi32.CreateCompatibleDC.argtypes = (wt.HDC,)
+gdi32.CreateCompatibleBitmap.restype = wt.HBITMAP
+gdi32.CreateCompatibleBitmap.argtypes = (wt.HDC, ctypes.c_int, ctypes.c_int)
+gdi32.SelectObject.restype = wt.HGDIOBJ
+gdi32.SelectObject.argtypes = (wt.HDC, wt.HGDIOBJ)
+gdi32.DeleteObject.argtypes = (wt.HGDIOBJ,)
+gdi32.DeleteDC.argtypes = (wt.HDC,)
+gdi32.SetStretchBltMode.argtypes = (wt.HDC, ctypes.c_int)
+gdi32.SetBrushOrgEx.argtypes = (wt.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_void_p)
+gdi32.BitBlt.argtypes = (wt.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                         wt.HDC, ctypes.c_int, ctypes.c_int, wt.DWORD)
+gdi32.StretchBlt.argtypes = (wt.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                             wt.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.DWORD)
+gdi32.GetDIBits.argtypes = (wt.HDC, wt.HBITMAP, wt.UINT, wt.UINT, ctypes.c_void_p, ctypes.c_void_p, wt.UINT)
 
-def grab_jpeg(quality, max_w):
-    img = ImageGrab.grab()   # màn hình chính
-    W, H = img.size
-    # vẽ con trỏ chuột (ảnh chụp không có sẵn con trỏ)
-    cx, cy = cursor_pos()
-    sw, sh = screen_size()
-    if sw and sh:
-        cx = cx * W / sw
-        cy = cy * H / sh
-    k = max(1.0, W / 1100.0)
-    pts = [(cx + x * k, cy + y * k) for x, y in CURSOR_SHAPE]
-    d = ImageDraw.Draw(img)
-    d.polygon(pts, fill=(255, 255, 255), outline=(0, 0, 0))
-    d.line(pts + [pts[0]], fill=(0, 0, 0), width=max(1, int(k)))
-    if max_w and W > max_w:
-        img = img.resize((max_w, int(H * max_w / W)), Image.BILINEAR)
+class BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [("biSize", wt.DWORD), ("biWidth", wt.LONG), ("biHeight", wt.LONG),
+                ("biPlanes", wt.WORD), ("biBitCount", wt.WORD), ("biCompression", wt.DWORD),
+                ("biSizeImage", wt.DWORD), ("biXPelsPerMeter", wt.LONG), ("biYPelsPerMeter", wt.LONG),
+                ("biClrUsed", wt.DWORD), ("biClrImportant", wt.DWORD)]
+
+class Capturer:
+    """Mỗi kết nối một bộ chụp riêng; giữ lại DC/bitmap giữa các khung hình."""
+    def __init__(self):
+        self.size = None
+        self.mdc = self.bmp = self.old = None
+        self.buf = None
+
+    def _prepare(self, sdc, ow, oh):
+        if self.size == (ow, oh):
+            return
+        self.close()
+        self.mdc = gdi32.CreateCompatibleDC(sdc)
+        self.bmp = gdi32.CreateCompatibleBitmap(sdc, ow, oh)
+        self.old = gdi32.SelectObject(self.mdc, self.bmp)
+        self.buf = ctypes.create_string_buffer(ow * oh * 4)
+        self.size = (ow, oh)
+
+    def grab(self, x, y, w, h, ow, oh):
+        """Chụp vùng (x,y,w,h) của màn hình, thu về kích thước (ow,oh). Trả về bytes BGRX."""
+        sdc = user32.GetDC(None)
+        try:
+            self._prepare(sdc, ow, oh)
+            if (ow, oh) == (w, h):
+                ok = gdi32.BitBlt(self.mdc, 0, 0, w, h, sdc, x, y, 0x00CC0020)
+            else:
+                gdi32.SetStretchBltMode(self.mdc, 4)   # HALFTONE: chữ nét hơn khi thu nhỏ
+                gdi32.SetBrushOrgEx(self.mdc, 0, 0, None)
+                ok = gdi32.StretchBlt(self.mdc, 0, 0, ow, oh, sdc, x, y, w, h, 0x00CC0020)
+        finally:
+            user32.ReleaseDC(None, sdc)
+        if not ok:
+            return None
+        bmi = BITMAPINFOHEADER(ctypes.sizeof(BITMAPINFOHEADER), ow, -oh, 1, 32, 0, 0, 0, 0, 0, 0)
+        gdi32.GetDIBits(self.mdc, self.bmp, 0, oh, self.buf, ctypes.byref(bmi), 0)
+        return self.buf.raw
+
+    def close(self):
+        if self.mdc:
+            gdi32.SelectObject(self.mdc, self.old)
+            gdi32.DeleteObject(self.bmp)
+            gdi32.DeleteDC(self.mdc)
+        self.mdc = self.bmp = self.old = None
+        self.size = None
+
+def encode_jpeg(raw, ow, oh, quality):
+    if raw is None:
+        img = ImageGrab.grab().resize((ow, oh))       # dự phòng
+    else:
+        img = Image.frombuffer("RGB", (ow, oh), raw, "raw", "BGRX", 0, 1)
     buf = io.BytesIO()
-    img.convert("RGB").save(buf, "JPEG", quality=quality)
+    img.save(buf, "JPEG", quality=quality)
     return buf.getvalue()
 
 # ---------- Mật khẩu & phiên ----------
@@ -215,9 +273,15 @@ try:
         PASSWORD = f.read().strip() or None
 except Exception:
     pass
-FIXED_PW = PASSWORD is not None
+NEW_PW = PASSWORD is None
 if not PASSWORD:
-    PASSWORD = "%06d" % secrets.randbelow(1000000)
+    # tạo mật khẩu cố định 8 số và lưu lại (máy tự khởi động nên mật khẩu không được đổi mỗi lần)
+    PASSWORD = "%08d" % secrets.randbelow(100000000)
+    try:
+        with open(PW_FILE, "w", encoding="utf-8") as f:
+            f.write(PASSWORD)
+    except Exception:
+        pass
 
 TOKENS = set()
 FAILS = {}   # ip -> [số lần sai, khóa đến lúc]
@@ -317,9 +381,167 @@ def tunnel_loop():
         time.sleep(10)
 
 def republish_loop():
+    last_ok = 0
     while True:
-        time.sleep(20 * 60)   # ntfy.sh giữ tin 12 giờ, đăng lại định kỳ cho chắc
-        publish_url()
+        time.sleep(30)
+        if PUBLIC_URL and time.time() - last_ok > 20 * 60:   # ntfy.sh giữ tin 12 giờ
+            if publish_url():
+                last_ok = time.time()
+
+# ---------- WebSocket (tự viết, không cần thư viện) ----------
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+class WsSession:
+    def __init__(self, rfile, sock):
+        self.rfile, self.sock = rfile, sock
+        self.lock = threading.Lock()
+        self.alive = True
+        self.sem = threading.BoundedSemaphore(2)   # tối đa 2 khung hình đang trên đường đi
+        self.cfg = {"q": 50, "w": 1280, "fps": 20}
+        self.view = {"x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0, "pw": 1280}
+        self.force = True
+
+    def send(self, data, opcode):
+        n = len(data)
+        if n < 126:
+            head = struct.pack("!BB", 0x80 | opcode, n)
+        elif n < 65536:
+            head = struct.pack("!BBH", 0x80 | opcode, 126, n)
+        else:
+            head = struct.pack("!BBQ", 0x80 | opcode, 127, n)
+        with self.lock:
+            self.sock.sendall(head + data)
+
+    def send_text(self, obj):
+        self.send(json.dumps(obj).encode("utf-8"), 0x1)
+
+    def recv(self):
+        h = self.rfile.read(2)
+        if len(h) < 2:
+            return None, None
+        op = h[0] & 0x0F
+        n = h[1] & 0x7F
+        if n == 126:
+            n = struct.unpack("!H", self.rfile.read(2))[0]
+        elif n == 127:
+            n = struct.unpack("!Q", self.rfile.read(8))[0]
+        if n > 1_000_000:
+            return None, None
+        mask = self.rfile.read(4) if h[1] & 0x80 else b"\0\0\0\0"
+        data = bytearray(self.rfile.read(n))
+        for i in range(len(data)):
+            data[i] ^= mask[i & 3]
+        return op, bytes(data)
+
+def ws_reader(sess):
+    while sess.alive:
+        op, data = sess.recv()
+        if op is None or op == 0x8:
+            break
+        if op == 0x9:
+            sess.send(data, 0xA)
+            continue
+        if op != 0x1:
+            continue
+        if data == b"a":   # điện thoại báo đã nhận xong 1 khung hình
+            try:
+                sess.sem.release()
+            except ValueError:
+                pass
+            continue
+        try:
+            m = json.loads(data.decode("utf-8"))
+        except Exception:
+            continue
+        t = m.get("t")
+        if t == "in":
+            handle_events(m.get("ev", []))
+        elif t == "view":
+            with sess.lock:
+                for k in ("x0", "y0", "x1", "y1", "pw"):
+                    if k in m:
+                        sess.view[k] = float(m[k])
+            sess.force = True
+        elif t == "cfg":
+            with sess.lock:
+                sess.cfg["q"] = max(10, min(95, int(m.get("q", 50))))
+                sess.cfg["w"] = max(0, min(4000, int(m.get("w", 1280))))
+                sess.cfg["fps"] = max(1, min(30, int(m.get("fps", 20))))
+            sess.force = True
+        elif t == "p":
+            sess.send_text({"t": "p", "ts": m.get("ts")})
+    sess.alive = False
+
+def ws_sender(sess):
+    cap = Capturer()
+    prev_raw, prev_key, prev_cur = None, None, None
+    last_full, last_ping, fid = 0.0, time.time(), 0
+    try:
+        while sess.alive:
+            if not sess.sem.acquire(timeout=1.0):
+                if time.time() - last_ping > 15:
+                    sess.send(b"", 0x9)   # giữ kết nối qua Cloudflare
+                    last_ping = time.time()
+                continue
+            sent = False
+            t0 = time.time()
+            with sess.lock:
+                v = dict(sess.view)
+                c = dict(sess.cfg)
+            try:
+                sw, sh = screen_size()
+                vx0, vy0 = max(0.0, v["x0"]), max(0.0, v["y0"])
+                vx1, vy1 = min(1.0, v["x1"]), min(1.0, v["y1"])
+                zoomed = (vx1 - vx0) < 0.97 or (vy1 - vy0) < 0.97
+                if not zoomed or t0 - last_full > 4:
+                    # cả màn hình (khi phóng to: 4 giây làm mới nền 1 lần, độ nét thấp)
+                    x0, y0, x1, y1 = 0.0, 0.0, 1.0, 1.0
+                    want = v["pw"] / max(0.05, vx1 - vx0) if not zoomed else 960
+                    full = True
+                else:
+                    mx, my = (vx1 - vx0) * 0.15, (vy1 - vy0) * 0.15
+                    x0, y0 = max(0.0, vx0 - mx), max(0.0, vy0 - my)
+                    x1, y1 = min(1.0, vx1 + mx), min(1.0, vy1 + my)
+                    want = v["pw"] * (x1 - x0) / max(0.01, vx1 - vx0)
+                    full = False
+                rx, ry = int(x0 * sw), int(y0 * sh)
+                rw, rh = max(1, int(x1 * sw) - rx), max(1, int(y1 * sh) - ry)
+                ow = min(rw, max(160, int(want)))
+                if c["w"] > 0:
+                    ow = min(ow, c["w"])
+                oh = max(1, round(rh * ow / rw))
+                raw = cap.grab(rx, ry, rw, rh, ow, oh)
+                key = (rx, ry, rw, rh, ow, oh)
+                cx, cy = cursor_pos()
+                if raw is not None and raw == prev_raw and key == prev_key and not sess.force:
+                    if (cx, cy) != prev_cur:   # chỉ con trỏ đổi chỗ (chuột thật trên máy tính)
+                        sess.send_text({"t": "c", "x": cx / max(1, sw - 1), "y": cy / max(1, sh - 1)})
+                        prev_cur = (cx, cy)
+                else:
+                    sess.force = False
+                    jpg = encode_jpeg(raw, ow, oh, c["q"])
+                    fid += 1
+                    head = struct.pack("<IHHHHHHhh", fid, sw, sh, rx, ry, rw, rh,
+                                       max(-32768, min(32767, cx)), max(-32768, min(32767, cy)))
+                    sess.send(head + jpg, 0x2)
+                    sent = True
+                    prev_raw, prev_key, prev_cur = raw, key, (cx, cy)
+                    if full:
+                        last_full = t0
+            except (OSError, ConnectionError):
+                break
+            except Exception:
+                time.sleep(0.3)
+            finally:
+                if not sent:
+                    try:
+                        sess.sem.release()
+                    except ValueError:
+                        pass
+            time.sleep(max(0.004, 1.0 / c["fps"] - (time.time() - t0)))
+    finally:
+        sess.alive = False
+        cap.close()
 
 # ---------- Máy chủ HTTP ----------
 class Handler(BaseHTTPRequestHandler):
@@ -370,10 +592,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(403, {"ok": False})
             w, h = screen_size()
             self._json(200, {"ok": True, "w": w, "h": h})
-        elif u.path == "/stream":
+        elif u.path == "/ws":
             if not self._token_ok(qs):
                 return self._json(403, {"ok": False})
-            self._stream(qs)
+            self._websocket()
         else:
             self._json(404, {"ok": False})
 
@@ -421,40 +643,77 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._json(404, {"ok": False})
 
-    def _stream(self, qs):
-        def num(key, default, lo, hi):
-            try:
-                return max(lo, min(hi, int(qs.get(key, [default])[0])))
-            except Exception:
-                return default
-        quality = num("q", 50, 10, 95)
-        max_w = num("w", 1280, 0, 4000)
-        fps = num("fps", 12, 1, 30)
-        self.close_connection = True
-        self.send_response(200)
-        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-        self.send_header("Cache-Control", "no-store, no-cache")
-        self.send_header("Connection", "close")
+    def _websocket(self):
+        key = self.headers.get("Sec-WebSocket-Key")
+        if not key or "websocket" not in (self.headers.get("Upgrade") or "").lower():
+            return self._json(400, {"ok": False})
+        accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", accept)
         self.end_headers()
-        last, last_sent = None, 0
+        self.close_connection = True
+        sock = self.connection
         try:
-            self.wfile.write(b"--frame\r\n")
-            while True:
-                t0 = time.time()
-                try:
-                    jpg = grab_jpeg(quality, max_w)
-                except Exception:
-                    time.sleep(0.5)   # ví dụ: màn hình khóa / hộp thoại UAC
-                    continue
-                if jpg != last or t0 - last_sent > 2:
-                    self.wfile.write(b"Content-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n" % len(jpg))
-                    self.wfile.write(jpg)
-                    self.wfile.write(b"\r\n--frame\r\n")
-                    self.wfile.flush()
-                    last, last_sent = jpg, t0
-                time.sleep(max(0.0, 1.0 / fps - (time.time() - t0)))
-        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except Exception:
             pass
+        sess = WsSession(self.rfile, sock)
+        th = threading.Thread(target=ws_sender, args=(sess,), daemon=True)
+        th.start()
+        try:
+            ws_reader(sess)
+        except Exception:
+            pass
+        sess.alive = False
+        th.join(timeout=3)
+
+# ---------- Khởi động cùng Windows ----------
+import winreg
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+RUN_NAME = "DieuKhienMay"
+CONFIG_FILE = os.path.join(APP_DIR, "caidat.json")
+
+def startup_cmd():
+    if getattr(sys, "frozen", False):
+        return '"%s" --startup' % sys.executable
+    return '"%s" "%s" --startup' % (sys.executable, os.path.abspath(__file__))
+
+def autostart_get():
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            return winreg.QueryValueEx(k, RUN_NAME)[0]
+    except OSError:
+        return None
+
+def autostart_set(on):
+    try:
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            if on:
+                winreg.SetValueEx(k, RUN_NAME, 0, winreg.REG_SZ, startup_cmd())
+            else:
+                try:
+                    winreg.DeleteValue(k, RUN_NAME)
+                except OSError:
+                    pass
+        return True
+    except OSError:
+        return False
+
+def load_config():
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_config(c):
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(c, f)
+    except Exception:
+        pass
 
 def local_ips():
     ips = []
@@ -473,38 +732,83 @@ def local_ips():
         pass
     return ips or ["(không tìm thấy - kiểm tra Wi-Fi)"]
 
-def main():
-    os.system("title Dieu Khien May - dang chay")
-    # giữ máy không ngủ / tắt màn hình khi đang chạy
-    kernel32.SetThreadExecutionState(0x80000000 | 0x00000002 | 0x00000001)
-    try:
-        srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-    except OSError:
-        print("Cổng %d đang bị dùng. Có thể chương trình đã chạy rồi." % PORT)
-        input("Nhấn Enter để thoát...")
-        return
-    srv.daemon_threads = True
-    ips = local_ips()
-    print("=" * 52)
-    print("        ĐIỀU KHIỂN MÁY - ĐANG CHẠY")
-    print("=" * 52)
+def print_banner(ips):
+    print("=" * 56)
+    print("          ĐIỀU KHIỂN MÁY - ĐANG CHẠY")
+    print("=" * 56)
     print("  ID         :  %s     (dùng qua Internet)" % ID_SHOW)
     print("  Địa chỉ IP :  %s     (dùng trong Wi-Fi)" % ips[0])
     for ip in ips[1:]:
         print("                %s" % ip)
-    print("  Cổng       :  %d" % PORT)
-    print("  Mật khẩu   :  %s%s" % (PASSWORD, "  (cố định từ matkhau.txt)" if FIXED_PW else ""))
-    print("-" * 52)
-    print("  Qua Internet: nhập ID + mật khẩu (đang mở kết nối...)")
-    print("  Cùng Wi-Fi  : nhập IP + mật khẩu (nhanh hơn).")
-    print("  Nếu Windows hỏi tường lửa: chọn Cho phép (Allow).")
+    print("  Mật khẩu   :  %s" % PASSWORD)
+    print("  Khởi động cùng Windows: %s" % ("BẬT" if autostart_get() else "TẮT"))
+    print("-" * 56)
+    print("  Phím tắt trong cửa sổ này:")
+    print("   [K] Bật/tắt khởi động cùng Windows")
+    print("   [P] Đổi mật khẩu      [I] Hiện lại thông tin")
     print("  Đóng cửa sổ này để dừng điều khiển.")
-    print("=" * 52)
+    print("=" * 56)
+
+def console_loop(ips):
+    import msvcrt
+    global PASSWORD
+    while True:
+        ch = msvcrt.getwch().lower()
+        if ch == "k":
+            on = not autostart_get()
+            autostart_set(on)
+            print("  -> Khởi động cùng Windows: %s" % ("BẬT" if autostart_get() else "TẮT"))
+            c = load_config(); c["autostart"] = bool(on); save_config(c)
+        elif ch == "p":
+            pw = input("  Nhập mật khẩu mới (ít nhất 6 ký tự, Enter để hủy): ").strip()
+            if len(pw) >= 6:
+                PASSWORD = pw
+                try:
+                    with open(PW_FILE, "w", encoding="utf-8") as f:
+                        f.write(pw)
+                    print("  -> Đã đổi mật khẩu.")
+                except Exception:
+                    print("  -> Không lưu được matkhau.txt (đặt file .exe ở thư mục có quyền ghi).")
+            elif pw:
+                print("  -> Mật khẩu quá ngắn.")
+        elif ch == "i":
+            print_banner(ips)
+
+def main():
+    startup = "--startup" in sys.argv
+    os.system("title Dieu Khien May - dang chay")
+    if startup:
+        user32.ShowWindow(kernel32.GetConsoleWindow(), 6)   # tự chạy lúc mở máy: thu nhỏ cửa sổ
+    # giữ máy không ngủ / tắt màn hình khi đang chạy
+    kernel32.SetThreadExecutionState(0x80000000 | 0x00000002 | 0x00000001)
+    # khởi động cùng Windows: bật sẵn lần đầu, và cập nhật đường dẫn nếu file .exe bị chuyển chỗ
+    c = load_config()
+    if "autostart" not in c:
+        c["autostart"] = True
+        save_config(c)
+    if c.get("autostart"):
+        if autostart_get() != startup_cmd():
+            autostart_set(True)
+    try:
+        srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    except OSError:
+        print("Cổng %d đang bị dùng. Có thể chương trình đã chạy rồi." % PORT)
+        if not startup:
+            input("Nhấn Enter để thoát...")
+        return
+    srv.daemon_threads = True
+    if startup:
+        time.sleep(5)   # chờ mạng sẵn sàng sau khi mở máy
+    ips = local_ips()
+    print_banner(ips)
+    if NEW_PW:
+        print("  (Mật khẩu cố định đã lưu vào matkhau.txt - nhấn P để đổi)")
     threading.Thread(target=tunnel_loop, daemon=True).start()
     threading.Thread(target=republish_loop, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
-        srv.serve_forever()
-    except KeyboardInterrupt:
+        console_loop(ips)
+    except (KeyboardInterrupt, EOFError):
         pass
 
 if __name__ == "__main__":
