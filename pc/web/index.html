@@ -24,6 +24,9 @@ html,body{margin:0;height:100%;background:#0b0f14;color:#e6edf3;font-family:syst
 #bar .grow{flex:1 1 auto}
 #show{position:absolute;right:8px;bottom:8px;width:44px;height:44px;border-radius:50%;border:1px solid #2a3340;background:#1c2430cc;color:#fff;font-size:20px;display:none}
 #keys{position:absolute;left:0;right:0;display:none;gap:4px;padding:5px;background:#0b0f14f0;overflow-x:auto;border-top:1px solid #2a3340}
+#pad{position:absolute;right:10px;display:none;grid-template-columns:repeat(3,56px);grid-template-rows:repeat(3,56px);gap:4px;opacity:.85}
+#pad button{border:1px solid #2a3340;border-radius:12px;background:#1c2430e0;color:#fff;font-size:24px;padding:0}
+#pad button:active,#pad button.dn{background:#2f81f7}
 #kb{position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;border:0;padding:0;font-size:16px;resize:none}
 #set{position:absolute;inset:0;background:#000b;display:none;align-items:center;justify-content:center;padding:14px}
 #set .card{max-height:100%;overflow:auto;max-width:420px}
@@ -54,6 +57,7 @@ html,body{margin:0;height:100%;background:#0b0f14;color:#e6edf3;font-family:syst
     <button id="bL">Trái</button>
     <button id="bR">Phải</button>
     <button id="bKb">⌨️</button>
+    <button id="bPad">✥</button>
     <button id="bZoom" style="display:none">1:1</button>
     <span class="grow"></span>
     <button id="bRot" style="display:none">⟳</button>
@@ -62,6 +66,11 @@ html,body{margin:0;height:100%;background:#0b0f14;color:#e6edf3;font-family:syst
     <button id="bExit">✕</button>
   </div>
   <button id="show">▴</button>
+  <div id="pad">
+    <span></span><button data-k="up">▲</button><span></span>
+    <button data-k="left">◀</button><button data-k="enter" style="font-size:15px">Enter</button><button data-k="right">▶</button>
+    <span></span><button data-k="down">▼</button><span></span>
+  </div>
   <textarea id="kb" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
   <div id="set">
     <div class="card">
@@ -80,7 +89,7 @@ html,body{margin:0;height:100%;background:#0b0f14;color:#e6edf3;font-family:syst
       <div class="help">
         <b>Touchpad:</b> kéo 1 ngón = di chuột · chạm = chuột trái · <b>nhấn giữ = chuột phải</b> · nhấn giữ rồi kéo = kéo thả · chạm 2 ngón = chuột phải · kéo 2 ngón = cuộn · chụm/mở 2 ngón = phóng to.<br>
         <b>Chạm trực tiếp:</b> chạm vào đâu click ở đó · <b>nhấn giữ = chuột phải</b> · kéo 1 ngón = kéo thả/bôi đen · 2 ngón như trên.<br>
-        Nút <b>Trái / Phải</b> click tại vị trí con trỏ hiện tại.
+        Nút <b>Trái / Phải</b> click tại vị trí con trỏ hiện tại. Nút <b>✥</b> bật/tắt phím mũi tên (giữ để lặp).
       </div>
     </div>
   </div>
@@ -91,9 +100,17 @@ html,body{margin:0;height:100%;background:#0b0f14;color:#e6edf3;font-family:syst
 const $ = s => document.querySelector(s);
 const App = window.App || null;           // cầu nối khi chạy trong app Android
 let token = null, scrW = 1920, scrH = 1080;
-let cfg = {mode:'pad', q:50, w:1280, fps:12, sens:1};
-try { Object.assign(cfg, JSON.parse(localStorage.getItem('dk_cfg') || '{}')); } catch(e) {}
-function saveCfg(){ try{ localStorage.setItem('dk_cfg', JSON.stringify(cfg)); }catch(e){} }
+const NET = /trycloudflare\.com$/.test(location.hostname);   // đang dùng qua Internet
+const CFG_KEY = NET ? 'dk_cfg_net' : 'dk_cfg';
+let cfg = NET ? {mode:'pad', q:40, w:1280, fps:8, sens:1} : {mode:'pad', q:50, w:1280, fps:12, sens:1};
+try {
+  const saved = (App && App.getCfg) ? App.getCfg(CFG_KEY) : localStorage.getItem(CFG_KEY);
+  Object.assign(cfg, JSON.parse(saved || '{}'));
+} catch(e) {}
+function saveCfg(){
+  const v = JSON.stringify(cfg);
+  try{ if(App && App.setCfg) App.setCfg(CFG_KEY, v); else localStorage.setItem(CFG_KEY, v); }catch(e){}
+}
 function vibrate(ms){ try{ if(App && App.vibrate) App.vibrate(ms); else if(navigator.vibrate) navigator.vibrate(ms); }catch(e){} }
 
 // ---------- Đăng nhập ----------
@@ -141,7 +158,7 @@ function startStream(){
   status('Đang kết nối…', true);
   img.src = `/stream?t=${token}&q=${cfg.q}&w=${cfg.w}&fps=${cfg.fps}&r=${Date.now()}`;
 }
-img.onload = () => status('● Đã kết nối');
+img.onload = () => status(NET ? '● Đã kết nối qua Internet' : '● Đã kết nối (Wi-Fi)');
 img.onerror = async () => {
   if(!token) return;
   status('Mất kết nối, đang thử lại…', true);
@@ -168,7 +185,7 @@ function applyView(){
   wrap.style.transform = `translate(${view.tx}px,${view.ty}px) scale(${view.s})`;
   $('#bZoom').style.display = view.s > 1.02 ? '' : 'none';
 }
-window.addEventListener('resize', () => setTimeout(layout, 60));
+window.addEventListener('resize', () => setTimeout(() => { layout(); placeKeys(); }, 60));
 function toNorm(px, py){
   const r = stage.getBoundingClientRect();
   return {
@@ -332,9 +349,33 @@ for(const [label, k] of SPECIAL){
 const PAD = '          ';
 let prev = PAD, composing = false, kbOpen = false;
 function kbReset(){ kb.value = PAD; prev = PAD; try{ kb.setSelectionRange(PAD.length, PAD.length); }catch(e){} }
-function kbClose(){ kbOpen = false; kb.blur(); keysEl.style.display = 'none'; $('#bKb').classList.remove('on'); }
+function kbClose(){ kbOpen = false; kb.blur(); keysEl.style.display = 'none'; $('#bKb').classList.remove('on'); placeKeys(); }
 function placeKeys(){
-  const bar = $('#bar'); keysEl.style.bottom = (bar.style.display === 'none' ? 0 : bar.offsetHeight) + 'px';
+  const bar = $('#bar'), b = (bar.style.display === 'none' ? 0 : bar.offsetHeight);
+  keysEl.style.bottom = b + 'px';
+  $('#pad').style.bottom = (b + (keysEl.style.display === 'flex' ? keysEl.offsetHeight : 0) + 10) + 'px';
+}
+// ---------- Phím mũi tên ảo (giữ để lặp) ----------
+let padOn = false;
+bind($('#bPad'), () => {
+  padOn = !padOn; $('#pad').style.display = padOn ? 'grid' : 'none';
+  $('#bPad').classList.toggle('on', padOn); placeKeys();
+});
+for(const b of document.querySelectorAll('#pad button')){
+  let rep1 = null, rep2 = null;
+  const k = b.dataset.k;
+  const stop = () => { clearTimeout(rep1); clearInterval(rep2); b.classList.remove('dn'); };
+  const go = e => {
+    e.preventDefault(); stop(); b.classList.add('dn');
+    push({t:'key', k:[k]}); vibrate(10);
+    if(k !== 'enter') rep1 = setTimeout(() => { rep2 = setInterval(() => push({t:'key', k:[k]}), 70); }, 380);
+  };
+  b.addEventListener('touchstart', go, {passive:false});
+  b.addEventListener('touchend', e => { e.preventDefault(); stop(); }, {passive:false});
+  b.addEventListener('touchcancel', stop);
+  b.addEventListener('mousedown', go);
+  b.addEventListener('mouseup', stop);
+  b.addEventListener('mouseleave', stop);
 }
 bind($('#bKb'), () => {
   if(kbOpen) return kbClose();

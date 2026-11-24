@@ -77,6 +77,16 @@ public class MainActivity extends Activity {
         public void disconnect() { runOnUiThread(MainActivity.this::goHome); }
 
         @JavascriptInterface
+        public String getCfg(String key) {
+            return getSharedPreferences("cfg", MODE_PRIVATE).getString(key, "");
+        }
+
+        @JavascriptInterface
+        public void setCfg(String key, String value) {
+            getSharedPreferences("cfg", MODE_PRIVATE).edit().putString(key, value).apply();
+        }
+
+        @JavascriptInterface
         public void vibrate(int ms) {
             try {
                 Vibrator v = (Vibrator) getSystemService(VIBRATOR_SERVICE);

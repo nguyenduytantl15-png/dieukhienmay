@@ -4,7 +4,7 @@
 Điện thoại (cùng Wi-Fi) kết nối vào để xem màn hình và điều khiển chuột/bàn phím.
 Chạy: python server.py   (cần: pip install pillow)
 """
-import sys, os, io, json, time, secrets, socket, threading
+import sys, os, io, re, json, time, secrets, socket, threading, subprocess, urllib.request
 
 if os.name != "nt":
     print("Chương trình này chỉ chạy trên Windows.")
@@ -221,7 +221,105 @@ if not PASSWORD:
 
 TOKENS = set()
 FAILS = {}   # ip -> [số lần sai, khóa đến lúc]
+GLOBAL_FAILS = []   # thời điểm các lần sai (chống dò mật khẩu qua Internet)
 fail_lock = threading.Lock()
+
+# ---------- ID cố định (giống UltraViewer) ----------
+ID_FILE = os.path.join(APP_DIR, "id.txt")
+MACHINE_ID = None
+try:
+    with open(ID_FILE, "r", encoding="utf-8") as f:
+        MACHINE_ID = re.sub(r"\D", "", f.read())[:9] or None
+except Exception:
+    pass
+if not MACHINE_ID or len(MACHINE_ID) != 9:
+    MACHINE_ID = str(100000000 + secrets.randbelow(900000000))
+    try:
+        with open(ID_FILE, "w", encoding="utf-8") as f:
+            f.write(MACHINE_ID)
+    except Exception:
+        pass
+ID_SHOW = "%s %s %s" % (MACHINE_ID[:3], MACHINE_ID[3:6], MACHINE_ID[6:])
+NTFY_TOPIC = "https://ntfy.sh/dkm-v1-" + MACHINE_ID
+
+# ---------- Kết nối Internet: Cloudflare Tunnel + bảng tra ID (ntfy.sh) ----------
+PUBLIC_URL = None
+
+def _kill_child_with_me(proc):
+    """Gắn tiến trình con vào Job Object: đóng cửa sổ chương trình thì cloudflared cũng tắt."""
+    try:
+        class IO_COUNTERS(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_ulonglong) for n in ("a", "b", "c", "d", "e", "f")]
+        class BASIC(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_longlong), ("PerJobUserTimeLimit", ctypes.c_longlong),
+                        ("LimitFlags", wt.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wt.DWORD),
+                        ("Affinity", ctypes.c_size_t), ("PriorityClass", wt.DWORD), ("SchedulingClass", wt.DWORD)]
+        class EXT(ctypes.Structure):
+            _fields_ = [("Basic", BASIC), ("Io", IO_COUNTERS), ("ProcessMemoryLimit", ctypes.c_size_t),
+                        ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                        ("PeakJobMemoryUsed", ctypes.c_size_t)]
+        kernel32.CreateJobObjectW.restype = wt.HANDLE
+        job = kernel32.CreateJobObjectW(None, None)
+        info = EXT()
+        info.Basic.LimitFlags = 0x2000   # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        kernel32.SetInformationJobObject(wt.HANDLE(job), 9, ctypes.byref(info), ctypes.sizeof(info))
+        kernel32.AssignProcessToJobObject(wt.HANDLE(job), wt.HANDLE(int(proc._handle)))
+        globals()["_JOB"] = job   # giữ handle tới khi chương trình tắt
+    except Exception:
+        pass
+
+def find_cloudflared():
+    for d in (APP_DIR, RES_DIR):
+        p = os.path.join(d, "cloudflared.exe")
+        if os.path.exists(p):
+            return p
+    return None
+
+def publish_url():
+    if not PUBLIC_URL:
+        return False
+    try:
+        body = json.dumps({"url": PUBLIC_URL, "t": int(time.time())}).encode("utf-8")
+        req = urllib.request.Request(NTFY_TOPIC, data=body, method="POST",
+                                     headers={"Title": "dkm", "Cache": "yes"})
+        urllib.request.urlopen(req, timeout=15).read()
+        return True
+    except Exception:
+        return False
+
+def tunnel_loop():
+    global PUBLIC_URL
+    exe = find_cloudflared()
+    if not exe:
+        print("  [!] Không có cloudflared.exe -> chỉ dùng được trong cùng Wi-Fi.")
+        return
+    while True:
+        try:
+            proc = subprocess.Popen([exe, "tunnel", "--no-autoupdate", "--url", "http://127.0.0.1:%d" % PORT],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                    stdin=subprocess.DEVNULL, creationflags=0x08000000)
+            _kill_child_with_me(proc)
+            for raw in proc.stderr:
+                line = raw.decode("utf-8", "ignore")
+                m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
+                if m and m.group(0) != PUBLIC_URL:
+                    PUBLIC_URL = m.group(0)
+                    time.sleep(3)   # chờ đường hầm sẵn sàng
+                    ok = publish_url()
+                    print("  [i] %s  Internet: %s" % (time.strftime("%H:%M:%S"),
+                          "SẴN SÀNG - điện thoại nhập ID để kết nối" if ok else "đã mở nhưng chưa đăng ký được ID, đang thử lại"))
+            proc.wait()
+        except Exception as e:
+            print("  [!] Lỗi kết nối Internet:", e)
+        PUBLIC_URL = None
+        print("  [i] Mất kết nối Internet, thử lại sau 10 giây...")
+        time.sleep(10)
+
+def republish_loop():
+    while True:
+        time.sleep(20 * 60)   # ntfy.sh giữ tin 12 giờ, đăng lại định kỳ cho chắc
+        publish_url()
 
 # ---------- Máy chủ HTTP ----------
 class Handler(BaseHTTPRequestHandler):
@@ -283,12 +381,15 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         qs = parse_qs(u.query)
         if u.path == "/login":
-            ip = self.client_address[0]
+            ip = self.headers.get("CF-Connecting-IP") or self.client_address[0]
             now = time.time()
             with fail_lock:
                 rec = FAILS.get(ip, [0, 0])
+                GLOBAL_FAILS[:] = [t for t in GLOBAL_FAILS if now - t < 600]
                 if rec[1] > now:
                     return self._json(429, {"ok": False, "msg": "Sai quá nhiều lần, chờ %d giây" % (rec[1] - now)})
+                if len(GLOBAL_FAILS) >= 30:
+                    return self._json(429, {"ok": False, "msg": "Có người dò mật khẩu, tạm khóa 10 phút"})
             data = self._read_body() or {}
             if str(data.get("pw", "")).strip() == PASSWORD:
                 tok = secrets.token_urlsafe(18)
@@ -299,6 +400,7 @@ class Handler(BaseHTTPRequestHandler):
                 print("  [+] %s  Điện thoại đã kết nối: %s" % (time.strftime("%H:%M:%S"), ip))
                 return self._json(200, {"ok": True, "token": tok, "w": w, "h": h})
             with fail_lock:
+                GLOBAL_FAILS.append(now)
                 rec[0] += 1
                 if rec[0] >= 5:
                     rec = [0, now + 60]
@@ -386,16 +488,20 @@ def main():
     print("=" * 52)
     print("        ĐIỀU KHIỂN MÁY - ĐANG CHẠY")
     print("=" * 52)
-    print("  Địa chỉ IP :  %s" % ips[0])
+    print("  ID         :  %s     (dùng qua Internet)" % ID_SHOW)
+    print("  Địa chỉ IP :  %s     (dùng trong Wi-Fi)" % ips[0])
     for ip in ips[1:]:
         print("                %s" % ip)
     print("  Cổng       :  %d" % PORT)
     print("  Mật khẩu   :  %s%s" % (PASSWORD, "  (cố định từ matkhau.txt)" if FIXED_PW else ""))
     print("-" * 52)
-    print("  Điện thoại phải dùng CHUNG Wi-Fi với máy này.")
+    print("  Qua Internet: nhập ID + mật khẩu (đang mở kết nối...)")
+    print("  Cùng Wi-Fi  : nhập IP + mật khẩu (nhanh hơn).")
     print("  Nếu Windows hỏi tường lửa: chọn Cho phép (Allow).")
     print("  Đóng cửa sổ này để dừng điều khiển.")
     print("=" * 52)
+    threading.Thread(target=tunnel_loop, daemon=True).start()
+    threading.Thread(target=republish_loop, daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

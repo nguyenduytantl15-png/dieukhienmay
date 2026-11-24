@@ -1,4 +1,4 @@
-# Điều Khiển Máy (mức 1: cùng Wi-Fi)
+# Điều Khiển Máy (Wi-Fi + Internet)
 
 Điều khiển máy tính Windows bằng điện thoại Android, giống UltraViewer nhưng chạy trong mạng Wi-Fi nhà.
 
@@ -17,6 +17,12 @@
 2. Cửa sổ hiện **IP** và **mật khẩu 6 số**.
 3. Điện thoại: mở app, nhập IP + mật khẩu → Kết nối.
    (Không cài app vẫn dùng được: mở Chrome trên điện thoại, vào `http://IP:8765`)
+
+## Qua Internet
+- Máy tính có **ID 9 số cố định** (lưu trong `id.txt` cạnh file .exe — đừng xóa).
+- Chương trình tự mở đường hầm Cloudflare (miễn phí, không cần mở port modem) và đăng ký địa chỉ theo ID qua ntfy.sh.
+- Điện thoại: tab **Qua Internet** → nhập ID + mật khẩu. Dùng 4G hay Wi-Fi khác đều được.
+- Nên đặt mật khẩu cố định dài (8 số trở lên) trong `matkhau.txt` khi dùng qua Internet.
 
 ## Mật khẩu cố định (cho máy nhà)
 Tạo file `matkhau.txt` đặt cạnh file `.exe`, ghi mật khẩu vào (ví dụ `246810`). Lần sau mật khẩu không đổi, app có thể "Nhớ mật khẩu".
