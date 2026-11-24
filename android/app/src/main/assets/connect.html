@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:#0b0f14;color:#e6edf3;font-family:system-ui,Roboto,sans-serif;display:flex;align-items:center;justify-content:center;padding:18px}
+.card{width:100%;max-width:380px;background:#151b23;border:1px solid #2a3340;border-radius:16px;padding:22px}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:#9da7b3;font-size:14px;margin-bottom:14px}
+label{display:block;font-size:14px;color:#9da7b3;margin:10px 0 4px}
+input[type=text],input[type=tel]{width:100%;font-size:19px;padding:12px;border-radius:10px;border:1px solid #2a3340;background:#0b0f14;color:#fff}
+.row{display:flex;gap:8px}.row>div:first-child{flex:1}.row>div:last-child{width:96px}
+.chk{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:15px}
+.chk input{width:20px;height:20px}
+button{margin-top:16px;width:100%;font-size:18px;padding:13px;border:0;border-radius:10px;background:#2f81f7;color:#fff;font-weight:600}
+.err{color:#ff7b72;font-size:14px;margin-top:10px;min-height:18px}
+.recent{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.recent span{background:#1c2430;border:1px solid #2a3340;border-radius:20px;padding:6px 12px;font-size:14px}
+.help{font-size:13px;color:#9da7b3;line-height:1.5;margin-top:16px;border-top:1px solid #2a3340;padding-top:10px}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🖥️ Điều Khiển Máy</h1>
+  <div class="sub">Điều khiển máy tính qua Wi-Fi</div>
+  <div class="row">
+    <div><label>Địa chỉ IP máy tính</label><input id="ip" type="text" inputmode="decimal" placeholder="192.168.1.5" autocomplete="off"></div>
+    <div><label>Cổng</label><input id="port" type="tel" value="8765"></div>
+  </div>
+  <div class="recent" id="recent"></div>
+  <label>Mật khẩu</label>
+  <input id="pw" type="tel" placeholder="6 số trên máy tính" autocomplete="off">
+  <div class="chk"><input type="checkbox" id="remember"><label for="remember" style="margin:0;color:#e6edf3">Nhớ mật khẩu</label></div>
+  <button id="go">Kết nối</button>
+  <div class="err" id="err"></div>
+  <div class="help">
+    1. Mở <b>DieuKhienMay.exe</b> trên máy tính.<br>
+    2. Nhập IP và mật khẩu hiện trên cửa sổ đó.<br>
+    3. Điện thoại và máy tính phải dùng <b>chung Wi-Fi</b>.
+  </div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const ls = (k, v) => { try{ if(v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); }catch(e){ return null; } };
+let recent = []; try{ recent = JSON.parse(ls('recent') || '[]'); }catch(e){}
+$('#ip').value = ls('ip') || ''; $('#port').value = ls('port') || '8765';
+$('#remember').checked = ls('remember') === '1';
+if($('#remember').checked) $('#pw').value = ls('pw') || '';
+const err = new URLSearchParams(location.search).get('err');
+if(err) $('#err').textContent = 'Không kết nối được (' + err + '). Kiểm tra IP, Wi-Fi và chương trình trên máy tính.';
+function drawRecent(){
+  $('#recent').innerHTML = '';
+  for(const ip of recent){ const s = document.createElement('span'); s.textContent = ip; s.onclick = () => $('#ip').value = ip; $('#recent').appendChild(s); }
+}
+drawRecent();
+$('#go').onclick = () => {
+  const ip = $('#ip').value.trim(), port = $('#port').value.trim() || '8765', pw = $('#pw').value.trim();
+  if(!/^[\w.\-]+$/.test(ip)){ $('#err').textContent = 'Nhập địa chỉ IP, ví dụ 192.168.1.5'; return; }
+  ls('ip', ip); ls('port', port); ls('remember', $('#remember').checked ? '1' : '0'); ls('pw', $('#remember').checked ? pw : '');
+  recent = [ip, ...recent.filter(x => x !== ip)].slice(0, 4); ls('recent', JSON.stringify(recent));
+  $('#err').textContent = 'Đang kết nối…';
+  location.href = 'http://' + ip + ':' + port + '/#pw=' + encodeURIComponent(pw);
+};
+</script>
+</body>
+</html>
