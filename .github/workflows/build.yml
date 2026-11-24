@@ -32,9 +32,12 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install pillow pyinstaller
+      - name: Tai cloudflared
+        working-directory: pc
+        run: Invoke-WebRequest -Uri https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
       - name: Build EXE
         working-directory: pc
-        run: pyinstaller --onefile --name DieuKhienMay --add-data "web;web" server.py
+        run: pyinstaller --onefile --name DieuKhienMay --add-data "web;web" --add-binary "cloudflared.exe;." server.py
       - uses: actions/upload-artifact@v4
         with:
           name: DieuKhienMay-PC
