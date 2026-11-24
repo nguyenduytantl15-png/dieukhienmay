@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Điều Khiển Máy</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:#0b0f14;color:#e6edf3;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden;user-select:none;-webkit-user-select:none}
+#login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:20px}
+.card{background:#151b23;border:1px solid #2a3340;border-radius:16px;padding:22px;width:100%;max-width:360px}
+.card h1{font-size:20px;margin:0 0 14px}
+.card input{width:100%;font-size:20px;padding:12px;border-radius:10px;border:1px solid #2a3340;background:#0b0f14;color:#fff;letter-spacing:3px;text-align:center}
+.card button{margin-top:12px;width:100%;font-size:17px;padding:12px;border:0;border-radius:10px;background:#2f81f7;color:#fff;font-weight:600}
+.err{color:#ff7b72;min-height:20px;margin-top:10px;font-size:14px}
+#app{position:fixed;inset:0;display:none}
+#stage{position:absolute;inset:0;touch-action:none;overflow:hidden}
+#wrap{position:absolute;transform-origin:0 0}
+#scr{width:100%;height:100%;display:block;pointer-events:none;image-rendering:auto}
+#status{position:absolute;top:8px;left:50%;transform:translateX(-50%);background:#000a;padding:5px 12px;border-radius:20px;font-size:13px;pointer-events:none;transition:opacity .4s}
+#bar{position:absolute;left:0;right:0;bottom:0;display:flex;gap:4px;padding:5px;background:#0b0f14e6;border-top:1px solid #2a3340;overflow-x:auto}
+#bar button,#keys button{flex:0 0 auto;min-width:46px;height:40px;padding:0 10px;border:1px solid #2a3340;border-radius:9px;background:#1c2430;color:#e6edf3;font-size:14px}
+#bar button.on{background:#2f81f7;border-color:#2f81f7}
+#bar .grow{flex:1 1 auto}
+#show{position:absolute;right:8px;bottom:8px;width:44px;height:44px;border-radius:50%;border:1px solid #2a3340;background:#1c2430cc;color:#fff;font-size:20px;display:none}
+#keys{position:absolute;left:0;right:0;display:none;gap:4px;padding:5px;background:#0b0f14f0;overflow-x:auto;border-top:1px solid #2a3340}
+#pad{position:absolute;right:10px;display:none;grid-template-columns:repeat(3,56px);grid-template-rows:repeat(3,56px);gap:4px;opacity:.85}
+#pad button{border:1px solid #2a3340;border-radius:12px;background:#1c2430e0;color:#fff;font-size:24px;padding:0}
+#pad button:active,#pad button.dn{background:#2f81f7}
+#scroll{position:absolute;right:0;top:0;width:30px;display:none;background:linear-gradient(90deg,#0000,#ffffff14);border-left:1px dashed #ffffff30;color:#ffffff70;font-size:12px;flex-direction:column;justify-content:space-between;align-items:center;padding:6px 0;touch-action:none}
+#zl{min-width:58px}
+#kb{position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;border:0;padding:0;font-size:16px;resize:none}
+#set{position:absolute;inset:0;background:#000b;display:none;align-items:center;justify-content:center;padding:14px}
+#set .card{max-height:100%;overflow:auto;max-width:420px}
+#set label{display:block;margin:10px 0 4px;font-size:14px;color:#9da7b3}
+#set select,#set input[type=range]{width:100%;font-size:16px;padding:8px;border-radius:8px;background:#0b0f14;color:#fff;border:1px solid #2a3340}
+.help{font-size:13px;color:#9da7b3;line-height:1.55;margin-top:14px;border-top:1px solid #2a3340;padding-top:10px}
+.help b{color:#e6edf3}
+</style>
+</head>
+<body>
+
+<div id="login">
+  <div class="card">
+    <h1>🖥️ Điều Khiển Máy</h1>
+    <div style="font-size:14px;color:#9da7b3;margin-bottom:10px">Nhập mật khẩu hiện trên cửa sổ chương trình ở máy tính</div>
+    <input id="pw" type="tel" inputmode="numeric" placeholder="Mật khẩu" autocomplete="off">
+    <button id="go">Kết nối</button>
+    <div class="err" id="lerr"></div>
+  </div>
+</div>
+
+<div id="app">
+  <div id="stage"><div id="wrap"><img id="scr" alt=""></div></div>
+  <div id="status">Đang kết nối…</div>
+  <div id="keys"></div>
+  <div id="bar">
+    <button id="bMode">Touchpad</button>
+    <button id="bL">Trái</button>
+    <button id="bR">Phải</button>
+    <button id="bKb">⌨️</button>
+    <button id="bPad">✥</button>
+    <button id="bZo">−</button>
+    <button id="bZoom">1.0x</button>
+    <button id="bZi">＋</button>
+    <span class="grow"></span>
+    <button id="bRot" style="display:none">⟳</button>
+    <button id="bSet">⚙️</button>
+    <button id="bHide">▾</button>
+    <button id="bExit">✕</button>
+  </div>
+  <div id="scroll"><span>▲</span><span>cuộn</span><span>▼</span></div>
+  <button id="show">▴</button>
+  <div id="pad">
+    <span></span><button data-k="up">▲</button><span></span>
+    <button data-k="left">◀</button><button data-k="enter" style="font-size:15px">Enter</button><button data-k="right">▶</button>
+    <span></span><button data-k="down">▼</button><span></span>
+  </div>
+  <textarea id="kb" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+  <div id="set">
+    <div class="card">
+      <h1>⚙️ Cài đặt</h1>
+      <label>Chế độ điều khiển</label>
+      <select id="sMode"><option value="pad">Touchpad (như chuột laptop)</option><option value="direct">Chạm trực tiếp vào màn hình</option></select>
+      <label>Chất lượng ảnh</label>
+      <select id="sQ"><option value="30">Thấp (mượt nhất)</option><option value="50">Vừa</option><option value="70">Cao</option><option value="85">Rất cao</option></select>
+      <label>Độ phân giải tối đa</label>
+      <select id="sW"><option value="800">800 px</option><option value="1280">1280 px</option><option value="1600">1600 px</option><option value="1920">1920 px</option><option value="0">Gốc</option></select>
+      <label>Số khung hình / giây</label>
+      <select id="sF"><option value="5">5</option><option value="10">10</option><option value="15">15</option><option value="20">20</option><option value="25">25</option></select>
+      <label>Thanh cuộn ở mép phải màn hình</label>
+      <select id="sSc"><option value="1">Hiện</option><option value="0">Ẩn</option></select>
+      <label>Độ nhạy touchpad: <span id="sSv"></span></label>
+      <input id="sS" type="range" min="0.4" max="3" step="0.1">
+      <button id="sOk">Xong</button>
+      <div class="help">
+        <b>Touchpad:</b> kéo 1 ngón = di chuột · chạm = chuột trái · <b>nhấn giữ = chuột phải</b> · nhấn giữ rồi kéo = kéo thả · chạm 2 ngón = chuột phải · kéo 2 ngón = cuộn · chụm/mở 2 ngón = phóng to.<br>
+        <b>Phóng to:</b> nút <b>＋ / −</b> (touchpad: phóng quanh con trỏ), bấm số <b>x</b> để về 1:1. Khi đang phóng to, kéo 2 ngón = di chuyển khung nhìn; dùng <b>thanh cuộn mép phải</b> để cuộn trang.<br>
+        <b>Chạm trực tiếp:</b> chạm vào đâu click ở đó · <b>nhấn giữ = chuột phải</b> · kéo 1 ngón = kéo thả/bôi đen · 2 ngón như trên.<br>
+        Nút <b>Trái / Phải</b> click tại vị trí con trỏ hiện tại. Nút <b>✥</b> bật/tắt phím mũi tên (giữ để lặp).
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const App = window.App || null;           // cầu nối khi chạy trong app Android
+let token = null, scrW = 1920, scrH = 1080;
+const NET = /trycloudflare\.com$/.test(location.hostname);   // đang dùng qua Internet
+const CFG_KEY = NET ? 'dk_cfg_net' : 'dk_cfg';
+let cfg = NET ? {mode:'pad', q:40, w:1280, fps:8, sens:1, sc:1} : {mode:'pad', q:50, w:1280, fps:12, sens:1, sc:1};
+try {
+  const saved = (App && App.getCfg) ? App.getCfg(CFG_KEY) : localStorage.getItem(CFG_KEY);
+  Object.assign(cfg, JSON.parse(saved || '{}'));
+} catch(e) {}
+function saveCfg(){
+  const v = JSON.stringify(cfg);
+  try{ if(App && App.setCfg) App.setCfg(CFG_KEY, v); else localStorage.setItem(CFG_KEY, v); }catch(e){}
+}
+function vibrate(ms){ try{ if(App && App.vibrate) App.vibrate(ms); else if(navigator.vibrate) navigator.vibrate(ms); }catch(e){} }
+
+// ---------- Đăng nhập ----------
+async function login(pw){
+  $('#lerr').textContent = '';
+  try{
+    const r = await fetch('/login', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({pw})});
+    const j = await r.json();
+    if(!j.ok) throw new Error(j.msg || 'Sai mật khẩu');
+    token = j.token; scrW = j.w; scrH = j.h;
+    try{ sessionStorage.setItem('dk_tok', token); }catch(e){}
+    start();
+  }catch(e){ showLogin(e.message || 'Không kết nối được'); }
+}
+function showLogin(msg){
+  $('#app').style.display = 'none'; $('#login').style.display = 'flex';
+  $('#scr').src = ''; $('#lerr').textContent = msg || '';
+}
+$('#go').onclick = () => login($('#pw').value.trim());
+$('#pw').addEventListener('keydown', e => { if(e.key === 'Enter') login($('#pw').value.trim()); });
+
+async function boot(){
+  const m = location.hash.match(/pw=([^&]*)/);
+  if(m){ history.replaceState(null, '', location.pathname); return login(decodeURIComponent(m[1])); }
+  let t = null; try{ t = sessionStorage.getItem('dk_tok'); }catch(e){}
+  if(t){
+    try{ const r = await fetch('/info?t=' + t); if(r.ok){ const j = await r.json(); token = t; scrW = j.w; scrH = j.h; return start(); } }catch(e){}
+  }
+  showLogin('');
+}
+
+// ---------- Hiển thị màn hình ----------
+const stage = $('#stage'), wrap = $('#wrap'), img = $('#scr'), st = $('#status');
+let base = {x:0,y:0,w:1,h:1}, view = {s:1,tx:0,ty:0}, stTimer = null;
+function status(msg, keep){
+  st.textContent = msg; st.style.opacity = 1; clearTimeout(stTimer);
+  if(!keep) stTimer = setTimeout(() => st.style.opacity = 0, 1800);
+}
+function start(){
+  $('#login').style.display = 'none'; $('#app').style.display = 'block';
+  if(App && App.rotate) $('#bRot').style.display = '';
+  applyCfgUI(); layout(); placeKeys(); startStream();
+}
+function startStream(){
+  status('Đang kết nối…', true);
+  img.src = `/stream?t=${token}&q=${cfg.q}&w=${cfg.w}&fps=${cfg.fps}&r=${Date.now()}`;
+}
+img.onload = () => status(NET ? '● Đã kết nối qua Internet' : '● Đã kết nối (Wi-Fi)');
+img.onerror = async () => {
+  if(!token) return;
+  status('Mất kết nối, đang thử lại…', true);
+  try{ const r = await fetch('/info?t=' + token); if(r.status === 403){ token = null; return showLogin('Phiên đã hết, nhập lại mật khẩu'); } }catch(e){}
+  setTimeout(() => { if(token) startStream(); }, 1500);
+};
+function layout(){
+  const W = stage.clientWidth, H = stage.clientHeight, a = scrW / scrH;
+  let w = W, h = W / a; if(h > H){ h = H; w = H * a; }
+  base = {x:(W - w) / 2, y:(H - h) / 2, w, h};
+  Object.assign(wrap.style, {left: base.x + 'px', top: base.y + 'px', width: w + 'px', height: h + 'px'});
+  clampView(); applyView();
+}
+function clampAxis(t, bp, size, ss){
+  const cs = size * view.s;
+  if(cs <= ss) return (ss - cs) / 2 - bp;
+  return Math.max(ss - cs - bp, Math.min(-bp, t));
+}
+function clampView(){
+  view.tx = clampAxis(view.tx, base.x, base.w, stage.clientWidth);
+  view.ty = clampAxis(view.ty, base.y, base.h, stage.clientHeight);
+}
+function applyView(){
+  wrap.style.transform = `translate(${view.tx}px,${view.ty}px) scale(${view.s})`;
+  $('#bZoom').textContent = view.s.toFixed(1) + 'x';
+  $('#bZoom').classList.toggle('on', view.s > 1.02);
+}
+window.addEventListener('resize', () => setTimeout(() => { layout(); placeKeys(); }, 60));
+function toNorm(px, py){
+  const r = stage.getBoundingClientRect();
+  return {
+    x: Math.max(0, Math.min(1, (px - r.left - base.x - view.tx) / (base.w * view.s))),
+    y: Math.max(0, Math.min(1, (py - r.top - base.y - view.ty) / (base.h * view.s)))
+  };
+}
+// khi phóng to ở chế độ touchpad: khung nhìn tự đi theo con trỏ
+let lastCur = {x:.5, y:.5};
+function zoomAt(s, px, py){            // px,py: điểm trên màn hình điện thoại giữ cố định khi phóng
+  s = Math.max(1, Math.min(8, s));
+  const qx = (px - base.x - view.tx) / view.s, qy = (py - base.y - view.ty) / view.s;
+  view.s = s; view.tx = px - base.x - qx * s; view.ty = py - base.y - qy * s;
+  clampView(); applyView();
+}
+function zoomBy(f){
+  let px = stage.clientWidth / 2, py = stage.clientHeight / 2;
+  if(cfg.mode === 'pad'){   // touchpad: phóng quanh con trỏ chuột
+    px = base.x + view.tx + lastCur.x * base.w * view.s;
+    py = base.y + view.ty + lastCur.y * base.h * view.s;
+  }
+  zoomAt(view.s * f, px, py);
+  if(cfg.mode === 'pad') onCursor(lastCur.x, lastCur.y);
+}
+function onCursor(cu, cv){
+  if(cu != null){ lastCur = {x:cu, y:cv}; }
+  if(cfg.mode !== 'pad' || view.s <= 1.02 || cu == null) return;
+  const W = stage.clientWidth, H = stage.clientHeight, mx = W * 0.15, my = H * 0.15;
+  const px = base.x + view.tx + cu * base.w * view.s, py = base.y + view.ty + cv * base.h * view.s;
+  if(px < mx) view.tx += mx - px; else if(px > W - mx) view.tx -= px - (W - mx);
+  if(py < my) view.ty += my - py; else if(py > H - my) view.ty -= py - (H - my);
+  clampView(); applyView();
+}
+
+// ---------- Gửi lệnh (theo thứ tự, gộp lệnh di chuột) ----------
+const Q = []; let busy = false, rx = 0, ry = 0;
+function push(ev){
+  if(ev.t === 'rel'){
+    rx += ev.dx; ry += ev.dy;
+    const ix = Math.trunc(rx), iy = Math.trunc(ry);
+    if(!ix && !iy) return;
+    rx -= ix; ry -= iy; ev = {t:'rel', dx:ix, dy:iy};
+  }
+  const last = Q[Q.length - 1];
+  if(last && last.t === 'rel' && ev.t === 'rel'){ last.dx += ev.dx; last.dy += ev.dy; }
+  else if(last && last.t === 'move' && ev.t === 'move'){ last.x = ev.x; last.y = ev.y; }
+  else if(last && last.t === 'wheel' && ev.t === 'wheel' && !!last.h === !!ev.h){ last.d += ev.d; }
+  else Q.push(ev);
+  flush();
+}
+async function flush(){
+  if(busy || !Q.length || !token) return;
+  busy = true;
+  const batch = Q.splice(0);
+  try{
+    const r = await fetch('/input?t=' + token, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(batch)});
+    if(r.ok){ const j = await r.json(); onCursor(j.cx, j.cy); }
+    else if(r.status === 403){ token = null; showLogin('Phiên đã hết, nhập lại mật khẩu'); }
+  }catch(e){}
+  busy = false;
+  if(Q.length) flush();
+}
+function click(b, px, py){
+  if(px != null && cfg.mode === 'direct'){ const n = toNorm(px, py); push({t:'move', x:n.x, y:n.y}); }
+  push({t:'click', b});
+}
+
+// ---------- Cử chỉ chạm ----------
+let T = null;
+const cen = p => ({x:(p[0].x + p[1].x) / 2, y:(p[0].y + p[1].y) / 2});
+const dist = p => Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+const pts = e => [...e.touches].map(t => ({x:t.clientX, y:t.clientY}));
+function onStart(e){
+  const p = pts(e);
+  if(!T){
+    T = {sx:p[0].x, sy:p[0].y, lx:p[0].x, ly:p[0].y, moved:false, long:false, drag:false, two:null};
+    T.timer = setTimeout(() => { if(T && !T.two && !T.moved){ T.long = true; vibrate(35); } }, 500);
+  }
+  if(p.length >= 2 && !T.two && !T.drag){
+    clearTimeout(T.timer);
+    const c = cen(p);
+    T.two = {c0:c, lc:c, d0:dist(p), mode:null, s0:view.s, tx0:view.tx, ty0:view.ty, ay:0, ax:0, t:Date.now(), zoomed:view.s > 1.02};
+  }
+}
+function onMove(e){
+  if(!T) return;
+  const p = pts(e);
+  if(T.two){
+    if(p.length < 2) return;
+    const tw = T.two, c = cen(p), d = dist(p);
+    if(!tw.mode){
+      const moved = Math.hypot(c.x - tw.c0.x, c.y - tw.c0.y);
+      if(Math.abs(d - tw.d0) > 18) tw.mode = 'zoom';
+      else if(moved > 12) tw.mode = tw.zoomed ? 'zoom' : 'scroll';   // đang phóng to: 2 ngón = kéo khung nhìn
+    }
+    if(tw.mode === 'zoom'){
+      const s = Math.max(1, Math.min(8, tw.s0 * d / tw.d0));
+      const qx = (tw.c0.x - base.x - tw.tx0) / tw.s0, qy = (tw.c0.y - base.y - tw.ty0) / tw.s0;
+      view.s = s; view.tx = c.x - base.x - qx * s; view.ty = c.y - base.y - qy * s;
+      clampView(); applyView();
+    } else if(tw.mode === 'scroll'){
+      tw.ay += c.y - tw.lc.y; tw.ax += c.x - tw.lc.x;
+      const step = 24;
+      while(Math.abs(tw.ay) >= step){ const g = Math.sign(tw.ay); push({t:'wheel', d:120 * g}); tw.ay -= g * step; }
+      while(Math.abs(tw.ax) >= step * 2){ const g = Math.sign(tw.ax); push({t:'wheel', d:-120 * g, h:true}); tw.ax -= g * step * 2; }
+    }
+    tw.lc = c;
+    return;
+  }
+  const q = p[0], dx = q.x - T.lx, dy = q.y - T.ly;
+  if(!T.moved && Math.hypot(q.x - T.sx, q.y - T.sy) > 8){
+    T.moved = true; clearTimeout(T.timer);
+    if(cfg.mode === 'direct'){
+      const n = toNorm(T.sx, T.sy); push({t:'move', x:n.x, y:n.y}); push({t:'down', b:'left'}); T.drag = true;
+    } else if(T.long){
+      push({t:'down', b:'left'}); T.drag = true;
+    }
+  }
+  if(T.moved){
+    if(cfg.mode === 'direct'){
+      const n = toNorm(q.x, q.y); push({t:'move', x:n.x, y:n.y});
+    } else {
+      const k = scrW / (base.w * view.s) * cfg.sens * (1 + Math.min(Math.hypot(dx, dy) / 14, 2));
+      push({t:'rel', dx:dx * k, dy:dy * k});
+    }
+  }
+  T.lx = q.x; T.ly = q.y;
+}
+function onEnd(e){
+  if(!T) return;
+  if(e.touches.length > 0) return;          // chờ nhấc hết ngón tay
+  clearTimeout(T.timer);
+  if(T.two){
+    if(!T.two.mode && Date.now() - T.two.t < 400){ click('right', T.two.c0.x, T.two.c0.y); vibrate(20); }
+  } else if(T.drag){
+    push({t:'up', b:'left'});
+  } else if(!T.moved){
+    if(T.long) click('right', T.sx, T.sy);   // nhấn giữ = chuột phải
+    else click('left', T.sx, T.sy);
+  }
+  T = null;
+}
+stage.addEventListener('touchstart', e => { e.preventDefault(); onStart(e); }, {passive:false});
+stage.addEventListener('touchmove', e => { e.preventDefault(); onMove(e); }, {passive:false});
+stage.addEventListener('touchend', e => { e.preventDefault(); onEnd(e); }, {passive:false});
+stage.addEventListener('touchcancel', e => { if(T && T.drag) push({t:'up', b:'left'}); T = null; });
+
+// chuột (khi thử bằng trình duyệt máy tính)
+stage.addEventListener('mousedown', e => { const n = toNorm(e.clientX, e.clientY); push({t:'move', x:n.x, y:n.y}); push({t:'down', b: e.button === 2 ? 'right' : 'left'}); });
+stage.addEventListener('mouseup', e => push({t:'up', b: e.button === 2 ? 'right' : 'left'}));
+stage.addEventListener('contextmenu', e => e.preventDefault());
+
+// ---------- Nút bấm (không làm mất bàn phím) ----------
+function bind(el, fn){
+  el.addEventListener('touchstart', e => { e.preventDefault(); fn(); }, {passive:false});
+  el.addEventListener('mousedown', e => { e.preventDefault(); fn(); });
+}
+bind($('#bL'), () => { push({t:'click', b:'left'}); vibrate(15); });
+bind($('#bR'), () => { push({t:'click', b:'right'}); vibrate(15); });
+bind($('#bMode'), () => { cfg.mode = cfg.mode === 'pad' ? 'direct' : 'pad'; saveCfg(); applyCfgUI(); status(cfg.mode === 'pad' ? 'Chế độ Touchpad' : 'Chế độ Chạm trực tiếp'); });
+bind($('#bZoom'), () => { view = {s:1, tx:0, ty:0}; layout(); });
+bind($('#bZi'), () => zoomBy(1.5));
+bind($('#bZo'), () => zoomBy(1 / 1.5));
+// ---------- Thanh cuộn mép phải ----------
+const scEl = $('#scroll'); let scY = null, scAcc = 0;
+scEl.addEventListener('touchstart', e => { e.preventDefault(); scY = e.touches[0].clientY; scAcc = 0; }, {passive:false});
+scEl.addEventListener('touchmove', e => {
+  e.preventDefault(); if(scY == null) return;
+  const y = e.touches[0].clientY; scAcc += y - scY; scY = y;
+  while(Math.abs(scAcc) >= 20){ const g = Math.sign(scAcc); push({t:'wheel', d:-120 * g}); scAcc -= g * 20; }
+}, {passive:false});
+scEl.addEventListener('touchend', e => { e.preventDefault(); scY = null; }, {passive:false});
+bind($('#bHide'), () => { $('#bar').style.display = 'none'; $('#show').style.display = 'block'; placeKeys(); });
+bind($('#show'), () => { $('#bar').style.display = 'flex'; $('#show').style.display = 'none'; placeKeys(); });
+bind($('#bRot'), () => App && App.rotate());
+bind($('#bExit'), () => { token = null; img.src = ''; try{ sessionStorage.removeItem('dk_tok'); }catch(e){} if(App && App.disconnect) App.disconnect(); else showLogin(''); });
+bind($('#bSet'), () => { kbClose(); $('#set').style.display = 'flex'; });
+
+// ---------- Bàn phím ----------
+const kb = $('#kb'), keysEl = $('#keys');
+const SPECIAL = [['Esc','esc'],['Tab','tab'],['⌫','bs'],['Enter','enter'],['Del','del'],['←','left'],['↑','up'],['↓','down'],['→','right'],
+  ['Win','win'],['Ctrl+C','ctrl+c'],['Ctrl+V','ctrl+v'],['Ctrl+X','ctrl+x'],['Ctrl+Z','ctrl+z'],['Ctrl+A','ctrl+a'],['Ctrl+S','ctrl+s'],
+  ['Alt+Tab','alt+tab'],['Alt+F4','alt+f4'],['Win+D','win+d'],['Win+E','win+e'],['Shift+Alt','shift+alt'],['Home','home'],['End','end'],['PgUp','pgup'],['PgDn','pgdn'],
+  ['F5','f5'],['F2','f2'],['F11','f11'],['PrtSc','prtsc'],['Task Mgr','ctrl+shift+esc']];
+for(const [label, k] of SPECIAL){
+  const b = document.createElement('button'); b.textContent = label;
+  bind(b, () => { push({t:'key', k:k.split('+')}); vibrate(10); });
+  keysEl.appendChild(b);
+}
+const PAD = '          ';
+let prev = PAD, composing = false, kbOpen = false;
+function kbReset(){ kb.value = PAD; prev = PAD; try{ kb.setSelectionRange(PAD.length, PAD.length); }catch(e){} }
+function kbClose(){ kbOpen = false; kb.blur(); keysEl.style.display = 'none'; $('#bKb').classList.remove('on'); placeKeys(); }
+function placeKeys(){
+  const bar = $('#bar'), b = (bar.style.display === 'none' ? 0 : bar.offsetHeight);
+  scEl.style.display = cfg.sc ? 'flex' : 'none';
+  scEl.style.bottom = (b + (keysEl.style.display === 'flex' ? keysEl.offsetHeight : 0)) + 'px';
+  $('#pad').style.right = (cfg.sc ? 40 : 10) + 'px';
+  keysEl.style.bottom = b + 'px';
+  $('#pad').style.bottom = (b + (keysEl.style.display === 'flex' ? keysEl.offsetHeight : 0) + 10) + 'px';
+}
+// ---------- Phím mũi tên ảo (giữ để lặp) ----------
+let padOn = false;
+bind($('#bPad'), () => {
+  padOn = !padOn; $('#pad').style.display = padOn ? 'grid' : 'none';
+  $('#bPad').classList.toggle('on', padOn); placeKeys();
+});
+for(const b of document.querySelectorAll('#pad button')){
+  let rep1 = null, rep2 = null;
+  const k = b.dataset.k;
+  const stop = () => { clearTimeout(rep1); clearInterval(rep2); b.classList.remove('dn'); };
+  const go = e => {
+    e.preventDefault(); stop(); b.classList.add('dn');
+    push({t:'key', k:[k]}); vibrate(10);
+    if(k !== 'enter') rep1 = setTimeout(() => { rep2 = setInterval(() => push({t:'key', k:[k]}), 70); }, 380);
+  };
+  b.addEventListener('touchstart', go, {passive:false});
+  b.addEventListener('touchend', e => { e.preventDefault(); stop(); }, {passive:false});
+  b.addEventListener('touchcancel', stop);
+  b.addEventListener('mousedown', go);
+  b.addEventListener('mouseup', stop);
+  b.addEventListener('mouseleave', stop);
+}
+bind($('#bKb'), () => {
+  if(kbOpen) return kbClose();
+  kbOpen = true; kbReset(); kb.focus(); keysEl.style.display = 'flex'; placeKeys(); $('#bKb').classList.add('on');
+});
+kb.addEventListener('blur', () => { if(kbOpen) setTimeout(() => { if(document.activeElement !== kb) kbClose(); }, 150); });
+kb.addEventListener('compositionstart', () => composing = true);
+kb.addEventListener('compositionend', () => { composing = false; setTimeout(maybeReset, 0); });
+kb.addEventListener('input', () => {
+  const cur = kb.value; let i = 0;
+  while(i < prev.length && i < cur.length && prev[i] === cur[i]) i++;
+  const del = prev.length - i, add = cur.slice(i);
+  if(del > 0) push({t:'bs', n:del});
+  if(add) push({t:'text', s:add});
+  prev = cur;
+  if(add.includes('\n')) kbReset(); else if(!composing) maybeReset();
+});
+function maybeReset(){ if(kb.value.length < 4 || kb.value.length > 60) kbReset(); }
+
+// ---------- Cài đặt ----------
+function applyCfgUI(){
+  $('#bMode').textContent = cfg.mode === 'pad' ? '🖱️ Touchpad' : '👆 Chạm';
+  $('#sMode').value = cfg.mode; $('#sQ').value = cfg.q; $('#sW').value = cfg.w; $('#sF').value = cfg.fps;
+  $('#sS').value = cfg.sens; $('#sSc').value = cfg.sc ? '1' : '0'; $('#sSv').textContent = (+cfg.sens).toFixed(1);
+}
+$('#sS').oninput = () => $('#sSv').textContent = (+$('#sS').value).toFixed(1);
+$('#sOk').onclick = () => {
+  const old = cfg.q + '|' + cfg.w + '|' + cfg.fps;
+  cfg.mode = $('#sMode').value; cfg.q = +$('#sQ').value; cfg.w = +$('#sW').value; cfg.fps = +$('#sF').value; cfg.sens = +$('#sS').value; cfg.sc = +$('#sSc').value;
+  saveCfg(); applyCfgUI(); placeKeys(); $('#set').style.display = 'none';
+  if(old !== cfg.q + '|' + cfg.w + '|' + cfg.fps) startStream();
+};
+
+boot();
+</script>
+</body>
+</html>
